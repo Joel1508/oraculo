@@ -42,9 +42,13 @@ criterios:
     nombre: Acceso al decisor
     peso: 15
     tipo: opciones
+    # Si hay varias evidencias (p. ej. conversación y correo verificado), cuenta la de más puntos.
     opciones:
       intro_calida: 15
-      contacto_conocido: 15   # también: ya hubo conversación (fecha_conversacion)
+      conversacion_decisor: 15         # fecha_conversacion + contacto_rol = decisor
+      conversacion_influenciador: 10   # influenciador que puede presentar al decisor
+      conversacion_otro: 4
+      conversacion_sin_rol: 0          # hubo conversación pero falta contacto_rol
       verified: 10            # decisor con correo corporativo verificado por Hunter
       accept_all: 4           # dominio acepta todo: correo no verificable
       solo_dominio: 0

@@ -64,6 +64,10 @@ def _opciones(c, H, hoy):
     h = H.get(c["clave"])
     if not _known(h):
         return None, None, [], None
+    if isinstance(h["valor"], list):  # varias evidencias: la de más puntos
+        res = [_opciones(c, {c["clave"]: {**h, "valor": v}}, hoy) for v in h["valor"]]
+        conocidos = [r for r in res if r[0] is not None]
+        return max(conocidos, key=lambda r: r[0]) if conocidos else res[0]
     v = norm_key(h["valor"])
     if v not in c["opciones"]:
         return None, v, [_ev(c["clave"], h)], f"valor no reconocido: {h['valor']!r}"

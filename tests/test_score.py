@@ -105,7 +105,8 @@ def test_deel_satisfecho_queda_en_seguimiento(icp):
     assert r["seguimiento"] and "metodo_pago" not in [d["criterio"] for d in r["desconocidos"]]
 
 
-@pytest.mark.parametrize("v,pts", [("intro_calida", 15), ("contacto_conocido", 15), ("verified", 10),
+@pytest.mark.parametrize("v,pts", [("intro_calida", 15), ("conversacion_decisor", 15), ("conversacion_influenciador", 10),
+                                   ("conversacion_otro", 4), ("conversacion_sin_rol", 0), ("verified", 10),
                                    ("accept_all", 4), ("solo_dominio", 0)])
 def test_acceso(icp, v, pts):
     assert puntos(sc.score({"acceso": h(v)}, icp, HOY), "acceso") == pts

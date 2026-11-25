@@ -7,7 +7,7 @@ Uso:
   python -m oraculo.crm recalcular
   python -m oraculo.crm validar
   python -m oraculo.crm etapa <id> <Etapa>
-  python -m oraculo.crm contacto <id> --nombre "..." --cargo "..." --email x@empresa.com   (fuente=manual)
+  python -m oraculo.crm contacto <id> --nombre "..." [--cargo ..] [--email x@empresa.com] [--canal whatsapp] [--rol decisor]
   python -m oraculo.crm buscar-correo <id>      (Hunter Email Finder para el contacto manual)
   python -m oraculo.crm en-crm <id> libre|tomado|pendiente
 
@@ -17,12 +17,18 @@ Regla de contactos:
   - Ningún LLM genera ni completa nombres, correos, cargos ni LinkedIn.
   - Sin email_status el estado es 'unknown' y el criterio acceso no suma puntos.
   - LinkedIn solo el que devuelve Hunter. Solo correos del dominio corporativo.
+  - Nunca se guardan números de teléfono (ni siquiera con canal_contacto = whatsapp).
+
+Contacted: en_crm_ontop != tomado Y (correo corporativo válido O contacto manual por un canal
+distinto de email). Engaged+: fecha_conversacion. Introduced+: acepta_intro, contractors_n, paises,
+metodo_pago y contacto_sabe_ontop.
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -34,10 +40,12 @@ from .sources import Signal, company_domain, company_key, normalize_domain, slug
 
 SEED_COLUMNS = ["id", "empresa", "segmento", "senal_publica", "fuente", "por_que_encaja", "desconocido",
                 "puntaje_publico", "tier", "etapa", "acepta_intro", "en_crm_ontop", "decisor_objetivo", "notas"]
-EXTRA_COLUMNS = ["dominio", "contractors_n", "paises", "metodo_pago", "proveedor_actual",
-                 "contacto_nombre", "contacto_cargo", "contacto_email", "email_status", "contacto_fuente",
-                 "contacto_linkedin", "contacto_sabe_ontop", "fecha_conversacion",
-                 "puntaje", "cobertura", "ultima_actualizacion"]
+EXTRA_COLUMNS = ["dominio", "contractors_n", "paises", "entidad_extranjera", "pais_entidad",
+                 "entidad_extranjera_fuente", "metodo_pago", "proveedor_actual",
+                 "descalificador", "descalificador_fuente", "descalificador_fecha", "descalificador_url",
+                 "contacto_nombre", "contacto_cargo", "contacto_rol", "contacto_email", "email_status",
+                 "contacto_fuente", "contacto_linkedin", "canal_contacto", "contacto_sabe_ontop",
+                 "fecha_conversacion", "puntaje", "cobertura", "ultima_actualizacion"]
 COLUMNS = SEED_COLUMNS + EXTRA_COLUMNS
 
 ETAPAS = ["Identified", "Researched", "Contacted", "Engaged", "Qualified", "Introduced", "Activated"]
@@ -46,11 +54,23 @@ EMAIL_STATUS = ("verified", "accept_all", "unknown")
 FUENTES_CONTACTO = ("hunter", "manual")
 CORREO_PERSONAL = {"gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "icloud.com", "live.com",
                    "hotmail.es", "yahoo.es", "outlook.es", "protonmail.com", "proton.me", "aol.com"}
+CANALES = ("email", "linkedin", "whatsapp", "presencial", "intro")
+ROLES = ("decisor", "influenciador", "otro")
+# descalificador del CRM -> descalificador de la ICP
+DESCALIFICADORES = {"eor_only": "solo_eor", "domestico": "fuerza_laboral_domestica",
+                    "sin_contratacion": "sin_contractors_ni_plan", "ninguno": None}
+FUENTES_DESCALIFICADOR = ("llamada", "correo", "web")
+# Campos de texto libre donde nunca puede quedar un número de teléfono
+CAMPOS_SIN_TELEFONO = ("contacto_nombre", "contacto_cargo", "contacto_email", "canal_contacto", "notas",
+                       "decisor_objetivo", "proveedor_actual", "por_que_encaja", "desconocido")
+_TELEFONO = re.compile(r"(?<![\w/])\+?\d[\d\s().-]{6,}\d(?![\w/])")
+_NO_TELEFONO = re.compile(r"https?://\S+|\b\d{4}-\d{2}-\d{2}\b")
 CONTACT_FIELDS = ("contacto_nombre", "contacto_cargo", "contacto_email", "contacto_linkedin")
 CALCULADAS = ("tier", "puntaje", "cobertura", "ultima_actualizacion")
 # Si alguno tiene dato, la fila ya tiene trabajo humano y `depurar` no la toca
 TRABAJO_HUMANO = CONTACT_FIELDS + ("fecha_conversacion", "contractors_n", "paises", "metodo_pago",
-                                   "proveedor_actual", "acepta_intro", "contacto_sabe_ontop", "segmento")
+                                   "proveedor_actual", "acepta_intro", "contacto_sabe_ontop", "segmento",
+                                   "descalificador", "canal_contacto", "contacto_rol")
 
 DEFAULT_CRM = Path("crm.csv")
 SIGNALS_CACHE = Path("out/signals.json")
@@ -69,7 +89,21 @@ def read(path: Path = DEFAULT_CRM) -> list[dict]:
         return [normalize({**{c: "" for c in COLUMNS}, **r}) for r in csv.DictReader(f)]
 
 
+def phone_like(texto: str | None) -> list[str]:
+    """Secuencias que parecen números de teléfono (7+ dígitos), ignorando URLs y fechas ISO."""
+    return [m.group(0).strip() for m in _TELEFONO.finditer(_NO_TELEFONO.sub(" ", texto or ""))
+            if sum(ch.isdigit() for ch in m.group(0)) >= 7]
+
+
+def phone_errors(r: dict) -> list[str]:
+    return [f"{c} parece contener un teléfono ({', '.join(t)}): el CRM nunca guarda teléfonos"
+            for c in CAMPOS_SIN_TELEFONO if (t := phone_like(r.get(c)))]
+
+
 def write(rows: list[dict], path: Path = DEFAULT_CRM) -> None:
+    malos = [f"{r.get('id')} {r.get('empresa')}: {e}" for r in rows for e in phone_errors(r)]
+    if malos:
+        raise ValueError("No se escribe crm.csv:\n  " + "\n  ".join(malos))
     extra = [k for r in rows for k in r if k not in COLUMNS]
     cols = COLUMNS + list(dict.fromkeys(extra))
     tmp = Path(str(path) + ".tmp")
@@ -94,9 +128,13 @@ def normalize(r: dict) -> dict:
     r["en_crm_ontop"] = r.get("en_crm_ontop", "").lower() or "pendiente"
     r["email_status"] = r.get("email_status", "").lower() or "unknown"
     r["contacto_fuente"] = r.get("contacto_fuente", "").lower()
-    for k in ("acepta_intro", "contacto_sabe_ontop"):
+    for k in ("acepta_intro", "contacto_sabe_ontop", "entidad_extranjera"):
         v = sc.norm_key(r.get(k, ""))
         r[k] = {"si": "si", "yes": "si", "no": "no"}.get(v, r.get(k, ""))
+    for k in ("descalificador", "descalificador_fuente", "canal_contacto", "contacto_rol"):
+        r[k] = sc.norm_key(r.get(k, "")) if r.get(k) else ""
+    if r.get("pais_entidad"):
+        r["pais_entidad"] = r["pais_entidad"].upper() if len(r["pais_entidad"]) <= 3 else r["pais_entidad"]
     if r.get("dominio"):
         r["dominio"] = normalize_domain(r["dominio"]) or r["dominio"].lower()
     return r
@@ -150,7 +188,7 @@ def import_seed(seed_path: Path, rows: list[dict], hoy: date | None = None) -> t
 
 def validate_contact(r: dict) -> list[str]:
     if not any(r.get(k) for k in CONTACT_FIELDS):
-        return []
+        return phone_errors(r)
     errs = []
     fuente = r.get("contacto_fuente", "")
     status = r.get("email_status") or "unknown"
@@ -174,14 +212,46 @@ def validate_contact(r: dict) -> list[str]:
             errs.append("falta 'dominio' para validar que el correo sea corporativo")
         elif not (edom == dom or edom.endswith("." + dom)):
             errs.append(f"el correo ({edom}) no es del dominio de la empresa ({dom})")
+    if r.get("canal_contacto") and r["canal_contacto"] not in CANALES:
+        errs.append(f"canal_contacto inválido: {r['canal_contacto']!r} ({'|'.join(CANALES)})")
+    if r.get("contacto_rol") and r["contacto_rol"] not in ROLES:
+        errs.append(f"contacto_rol inválido: {r['contacto_rol']!r} ({'|'.join(ROLES)})")
+    return errs + phone_errors(r)
+
+
+def corporate_email_ok(r: dict) -> bool:
+    return bool(r.get("contacto_email")) and not validate_contact(r)
+
+
+def validate_disqualifier(r: dict) -> list[str]:
+    """descalificador vacío = desconocido. Uno distinto de 'ninguno' necesita fuente y fecha;
+    si la fuente es web, también URL (una llamada no la necesita)."""
+    d = r.get("descalificador", "")
+    if not d:
+        return []
+    if d not in DESCALIFICADORES:
+        return [f"descalificador inválido: {d!r} ({'|'.join(DESCALIFICADORES)})"]
+    if d == "ninguno":
+        return []
+    errs = []
+    f = r.get("descalificador_fuente", "")
+    if f not in FUENTES_DESCALIFICADOR:
+        errs.append(f"descalificador_fuente debe ser {'|'.join(FUENTES_DESCALIFICADOR)}")
+    if not sc._fecha(r.get("descalificador_fecha")):
+        errs.append("falta descalificador_fecha (AAAA-MM-DD)")
+    if f == "web" and not r.get("descalificador_url", "").startswith(("http://", "https://")):
+        errs.append("descalificador_fuente = web necesita descalificador_url")
     return errs
 
 
 def set_contact(r: dict, *, nombre: str, cargo: str = "", email: str = "", fuente: str,
-                email_status: str = "unknown", linkedin: str = "", hoy: date | None = None) -> dict:
+                email_status: str = "unknown", linkedin: str = "", canal: str = "", rol: str = "",
+                hoy: date | None = None) -> dict:
     nuevo = {**r, "contacto_nombre": _s(nombre), "contacto_cargo": _s(cargo), "contacto_email": _s(email).lower(),
              "contacto_fuente": _s(fuente).lower(), "email_status": _s(email_status).lower() or "unknown",
-             "contacto_linkedin": _s(linkedin)}
+             "contacto_linkedin": _s(linkedin),
+             "canal_contacto": _s(canal).lower() or ("email" if email else r.get("canal_contacto", "")),
+             "contacto_rol": _s(rol).lower() or r.get("contacto_rol", "")}
     errs = validate_contact(nuevo)
     if errs:
         raise ValueError("Contacto rechazado: " + "; ".join(errs))
@@ -204,9 +274,15 @@ def blockers(r: dict, etapa: str, hoy: date | None = None) -> list[str]:
     if i >= _idx("Contacted"):
         if r.get("en_crm_ontop") == "tomado":
             out.append("en_crm_ontop = tomado: la empresa ya está en el CRM de Ontop")
-        if not r.get("contacto_email"):
-            out.append("falta contacto_email (corporativo)")
-        out += validate_contact(r)
+        errs = validate_contact(r)
+        otro_canal = (r.get("canal_contacto") in CANALES and r["canal_contacto"] != "email"
+                      and r.get("contacto_fuente") == "manual" and bool(r.get("contacto_nombre")))
+        if errs:
+            out += errs
+        elif not (corporate_email_ok(r) or otro_canal):
+            out.append("falta un correo corporativo válido o un contacto manual (contacto_nombre, "
+                       "contacto_fuente = manual) por un canal distinto de email "
+                       f"({'|'.join(c for c in CANALES if c != 'email')})")
     if i >= _idx("Engaged"):
         f = sc._fecha(r.get("fecha_conversacion"))
         if not f:
@@ -254,15 +330,55 @@ def facts_from_row(r: dict) -> dict[str, dict]:
     put("metodo_pago", r.get("metodo_pago"), "metodo_pago")
     put("vertical", r.get("segmento"), "segmento")
     put("en_crm_ontop", r.get("en_crm_ontop"), "en_crm_ontop")
+
+    if r.get("entidad_extranjera") in ("si", "no"):
+        fuente = r.get("entidad_extranjera_fuente") or "investigación manual"
+        H["entidad_extranjera"] = {
+            "valor": r["entidad_extranjera"] == "si", "url": _url(fuente),
+            "fuente": f"crm.csv (entidad_extranjera{', ' + r['pais_entidad'] if r.get('pais_entidad') else ''}; {fuente})"}
+
+    d = r.get("descalificador", "")
+    if d and d != "ninguno" and not validate_disqualifier(r):
+        H[DESCALIFICADORES[d]] = {
+            "valor": True, "url": r.get("descalificador_url") or None,
+            "fuente": f"crm.csv (descalificador {d}, {r['descalificador_fuente']} {r['descalificador_fecha']})"}
+
+    # acceso: varias evidencias; score.py toma la de más puntos
+    acceso, fuentes = [], []
     if sc._fecha(r.get("fecha_conversacion")):
-        put("acceso", "contacto_conocido", "fecha_conversacion")
-    elif r.get("contacto_email") and not validate_contact(r):
-        # unknown -> null en el ICP: sin puntos de acceso
-        H["acceso"] = {"valor": r.get("email_status") or "unknown",
-                       "fuente": f"crm.csv (email_status, contacto {r.get('contacto_fuente')})", "url": None}
-    elif r.get("dominio"):
-        put("acceso", "solo_dominio", "dominio")
+        rol = r.get("contacto_rol") if r.get("contacto_rol") in ROLES else "sin_rol"
+        acceso.append(f"conversacion_{rol}")
+        fuentes.append(f"fecha_conversacion + contacto_rol={rol}")
+    if corporate_email_ok(r):
+        acceso.append(r.get("email_status") or "unknown")  # unknown -> null: sin puntos de acceso
+        fuentes.append(f"email_status, contacto {r.get('contacto_fuente')}")
+    if not acceso and r.get("dominio"):
+        acceso.append("solo_dominio")
+        fuentes.append("dominio")
+    if acceso:
+        H["acceso"] = {"valor": acceso if len(acceso) > 1 else acceso[0],
+                       "fuente": f"crm.csv ({'; '.join(fuentes)})", "url": None}
     return H
+
+
+def _url(texto: str) -> str | None:
+    m = re.search(r"https?://\S+", texto or "")
+    return m.group(0) if m else None
+
+
+def prefill_from_signals(r: dict, ss: list[Signal], hoy: date | None = None) -> bool:
+    """Prellena entidad_extranjera desde Get on Board si la fila no lo tiene. Nunca pisa un valor."""
+    if r.get("entidad_extranjera"):
+        return False
+    s = next((s for s in ss if s.criterio == "entidad_extranjera" and s.valor is True
+              and s.fuente == "Get on Board"), None)
+    if not s:
+        return False
+    r["entidad_extranjera"] = "si"
+    r["pais_entidad"] = r.get("pais_entidad") or (s.datos.get("pais_empresa") or "")
+    r["entidad_extranjera_fuente"] = f"Get on Board {s.url or ''}".strip()
+    touch(r, hoy)
+    return True
 
 
 def row_key(r: dict, grupos: dict[str, list[Signal]] | None = None) -> str:
@@ -279,6 +395,7 @@ def recalc(rows: list[dict], icp: dict, grupos: dict[str, list[Signal]] | None =
     grupos = grupos or {}
     for r in rows:
         k = row_key(r, grupos)
+        prefill_from_signals(r, grupos.get(k, []), hoy)
         hechos = {**sc.facts_from_signals(grupos.get(k, [])), **facts_from_row(r)}
         res = sc.score(hechos, icp, hoy)
         res["excluido"] = sc.is_excluded(r.get("empresa"), r.get("dominio") or (None if k.startswith("sin-dominio:") else k), icp)
@@ -356,6 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("etapa"); p.add_argument("id"); p.add_argument("etapa")
     p = sub.add_parser("contacto"); p.add_argument("id")
     p.add_argument("--nombre", required=True); p.add_argument("--cargo", default=""); p.add_argument("--email", default="")
+    p.add_argument("--canal", choices=CANALES, default=""); p.add_argument("--rol", choices=ROLES, default="")
     p = sub.add_parser("buscar-correo"); p.add_argument("id")
     p = sub.add_parser("en-crm"); p.add_argument("id"); p.add_argument("estado", choices=EN_CRM_ONTOP)
     p = sub.add_parser("depurar", help="limpia filas auto-* sin trabajo humano (por defecto solo muestra)")
@@ -377,11 +495,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{r['id']:>4} {r['empresa'][:28]:<28} {r['puntaje']:>3} {r['tier'] or '-':<3} "
                   f"cobertura {r['cobertura']:>3}%  desconocidos: {', '.join(d['criterio'] for d in s['desconocidos']) or '-'}"
                   + (f"  DESCALIFICADO: {'; '.join(m['motivo'] for m in s['motivos'])}" if s["descalificado"] else "")
-                  + (f"  EXCLUIDO: {s['excluido']}" if s["excluido"] else ""))
+                  + (f"  EXCLUIDO: {s['excluido']}" if s["excluido"] else "")
+                  + (f"  AVISO descalificador sin aplicar: {'; '.join(validate_disqualifier(r))}"
+                     if validate_disqualifier(r) else ""))
     elif a.cmd == "validar":
         malos = 0
         for r in rows:
-            errs = validate_contact(r) + ([f"etapa inválida {r['etapa']!r}"] if r["etapa"] not in ETAPAS else [])
+            errs = (validate_contact(r) + validate_disqualifier(r)
+                    + ([f"etapa inválida {r['etapa']!r}"] if r["etapa"] not in ETAPAS else []))
             if r["etapa"] in ETAPAS:
                 errs += blockers(r, r["etapa"])
             if errs:
@@ -397,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     elif a.cmd == "contacto":
         r = _find(rows, a.id)
-        set_contact(r, nombre=a.nombre, cargo=a.cargo, email=a.email, fuente="manual")
+        set_contact(r, nombre=a.nombre, cargo=a.cargo, email=a.email, fuente="manual", canal=a.canal, rol=a.rol)
     elif a.cmd == "buscar-correo":
         from .enrich import hunter_email_finder
         from .run import load_env

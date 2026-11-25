@@ -54,7 +54,7 @@ def parse(jobs: list[dict], icp: dict) -> list[Signal]:
                 empresa=comp["name"].strip(), tipo="hecho",
                 texto=f"Empresa con sede en {pais} publica vacante remota para talento LATAM en Get on Board",
                 fuente="Get on Board", url=url, fecha=fecha, dominio=dominio,
-                criterio="entidad_extranjera", valor=True,
+                criterio="entidad_extranjera", valor=True, datos={"pais_empresa": pais},
             ))
     return out
 

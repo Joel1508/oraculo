@@ -31,7 +31,10 @@ cp .env.example .env                                   # HUNTER_API_KEY (opciona
 | Orden | `run.sort_key` | Puntaje desc, después cobertura desc, después la señal más reciente. `--top N` (por defecto 25) define cuántos se muestran. |
 | CRM | `crm.py` | Importa la semilla y agrega columnas. Recalcula puntaje, tier y cobertura. Etapas: Identified → Researched → Contacted → Engaged → Qualified → Introduced → Activated. |
 | Depurar | `crm depurar` | Revisa las filas `auto-*` que nadie ha tocado (etapa Identified, sin contacto ni datos de investigación). Elimina las excluidas y las que ya no tienen señales con las reglas actuales, y deja en null los dominios de ATS o que no coinciden con el nombre. Por defecto solo muestra el plan; con `--aplicar` guarda una copia en `crm.csv.bak`. |
-| Compuerta | `crm.blockers` | **Contacted**: contacto corporativo válido y `en_crm_ontop` ≠ `tomado`. **Engaged o más**: `fecha_conversacion`. **Introduced o más**: `acepta_intro = si`, `contractors_n`, `paises`, `metodo_pago` y `contacto_sabe_ontop = si`. |
+| Compuerta | `crm.blockers` | **Contacted**: `en_crm_ontop` ≠ `tomado` y además (correo corporativo válido **o** contacto manual con `contacto_nombre` por un `canal_contacto` distinto de email: linkedin, whatsapp, presencial o intro). **Engaged o más**: `fecha_conversacion`. **Introduced o más**: `acepta_intro = si`, `contractors_n`, `paises`, `metodo_pago` y `contacto_sabe_ontop = si`. |
+| Descalificador | `crm.validate_disqualifier` | `descalificador` puede ser `eor_only`, `domestico`, `sin_contratacion` o `ninguno`; vacío = desconocido. Cualquier valor distinto de `ninguno` deja el puntaje en 0, sin tier y con el motivo. Exige `descalificador_fuente` (llamada, correo o web) y `descalificador_fecha`. Si la fuente es web exige también `descalificador_url`; una llamada no necesita URL. Si falta algo, el descalificador no se aplica y sale como aviso. |
+| Entidad extranjera | `crm.prefill_from_signals` | `entidad_extranjera` (si/no/vacío) y `pais_entidad`. Con `si` suma los +5 de países. Se prellena desde Get on Board cuando la sede está fuera de LATAM, con la fuente en `entidad_extranjera_fuente`. Nunca pisa un valor que ya esté. |
+| Teléfonos | `crm.phone_errors` | El CRM nunca guarda números de teléfono. `crm.csv` no se escribe si algún campo de texto contiene uno. |
 | Decisores | `discover.py`, `enrich.py` | Hunter Domain Search (`--discover`) y Email Finder (`crm buscar-correo`). Solo correos del dominio de la empresa, con caché y tope de llamadas. |
 | Mensaje | `outreach.py` | Diagnóstico a partir de la señal concreta, sin nombrar ni atacar al proveedor actual. Aplica la ventana horaria de la Ley 2300 y como máximo un contacto por semana. Hasta que se llenen los datos del remitente en la ICP, el mensaje se marca como "no cumple". |
 | Fase 2 (interfaz) | `enrich_company.py` | Contrato Pydantic para extraer datos de **empresa** desde una URL pública con Claude. Cada campo lleva su cita y su URL; sin cita, el campo es null. Aún no está implementado. |
@@ -64,7 +67,6 @@ Los tests están en `tests/test_contacts.py`.
 
 ## Supuestos del puntaje (editables en `icp/ontop.yaml`)
 
-- **acceso**: con `fecha_conversacion` se cuenta como contacto conocido (15). La intro cálida (15) entra como hecho `acceso: intro_calida` en las señales manuales.
-- **paises**: `crm.csv` no tiene columna de entidad extranjera. Ese hecho llega desde Get on Board (sede fuera de LATAM) o desde señales manuales. Sin él, solo suman los +5 por 3 o más países.
+- **acceso**: con `fecha_conversacion`, los puntos dependen de `contacto_rol`: decisor = 15, influenciador que puede presentar al decisor = 10, otro = 4, sin rol = 0. Si además hay un correo verificado, cuenta la evidencia de más puntos. La intro cálida (15) entra como hecho `acceso: intro_calida` en las señales manuales.
 - **vertical**: busca palabras clave dentro del texto de `segmento` ("Consultora / staffing TI" → staffing = 10). Si no reconoce ninguna ("Startup CO multi-país"), queda null.
 - **tamano_etapa**: Serie D o posterior = 5 aunque tenga más de 20 empleados. Bootstrapped con 20 o más empleados = 10.
