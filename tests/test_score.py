@@ -192,3 +192,17 @@ def test_excluidos_grandes_no_salen_en_prospectos(icp):
     ps, ex = run.build(icp, g, [])
     assert [p["nombre"] for p in ps] == ["Acme"]
     assert ex == [{"nombre": "Dropbox", "motivo": icp["excluir_grandes"]["motivo"]}]
+
+
+@pytest.mark.parametrize("segmento,pts", [("Fintech CO", 10), ("Consultora / staffing TI", 10),
+                                          ("Staffing LATAM a EE. UU.", 10), ("Nearshore (MX)", 10),
+                                          ("Software / staffing", 10), ("Agencia EE. UU.", 5), ("Telco CO", 0)])
+def test_vertical_texto_libre(icp, segmento, pts):
+    assert puntos(sc.score({"vertical": h(segmento)}, icp, HOY), "vertical") == pts
+
+
+@pytest.mark.parametrize("segmento", ["Startup CO multi-país", "YC S26 (colombianos)", "Red cálida (exequipo)"])
+def test_vertical_no_clasificable_es_null(icp, segmento):
+    r = sc.score({"vertical": h(segmento)}, icp, HOY)
+    d = next(d for d in r["desconocidos"] if d["criterio"] == "vertical")
+    assert "no clasificable" in d["nota"] and r["cobertura"] == 0

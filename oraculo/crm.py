@@ -30,7 +30,7 @@ from pathlib import Path
 import yaml
 
 from . import score as sc
-from .sources import Signal, company_key, normalize_domain, slug
+from .sources import Signal, company_domain, company_key, normalize_domain, slug
 
 SEED_COLUMNS = ["id", "empresa", "segmento", "senal_publica", "fuente", "por_que_encaja", "desconocido",
                 "puntaje_publico", "tier", "etapa", "acepta_intro", "en_crm_ontop", "decisor_objetivo", "notas"]
@@ -47,6 +47,10 @@ FUENTES_CONTACTO = ("hunter", "manual")
 CORREO_PERSONAL = {"gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "icloud.com", "live.com",
                    "hotmail.es", "yahoo.es", "outlook.es", "protonmail.com", "proton.me", "aol.com"}
 CONTACT_FIELDS = ("contacto_nombre", "contacto_cargo", "contacto_email", "contacto_linkedin")
+CALCULADAS = ("tier", "puntaje", "cobertura", "ultima_actualizacion")
+# Si alguno tiene dato, la fila ya tiene trabajo humano y `depurar` no la toca
+TRABAJO_HUMANO = CONTACT_FIELDS + ("fecha_conversacion", "contractors_n", "paises", "metodo_pago",
+                                   "proveedor_actual", "acepta_intro", "contacto_sabe_ontop", "segmento")
 
 DEFAULT_CRM = Path("crm.csv")
 SIGNALS_CACHE = Path("out/signals.json")
@@ -126,6 +130,8 @@ def import_seed(seed_path: Path, rows: list[dict], hoy: date | None = None) -> t
             nuevos += 1
         cambio = False
         for k, v in s.items():
+            if not es_nueva and k in CALCULADAS:
+                continue  # tier y puntaje los recalcula score.py; la semilla no los vuelve a llenar
             if v and not r.get(k):
                 r[k] = v
                 cambio = True
@@ -293,6 +299,39 @@ def load_signal_groups(path: Path = SIGNALS_CACHE) -> dict[str, list[Signal]]:
     return {k: [Signal(**s) for s in ss] for k, ss in raw.items()}
 
 
+def purge_plan(rows: list[dict], icp: dict, grupos: dict[str, list[Signal]]) -> list[tuple[dict, str, str]]:
+    """Qué haría `depurar` con las filas auto-* que nadie ha tocado (etapa Identified, sin trabajo humano):
+    eliminar las excluidas o sin señales vigentes, y dejar en null los dominios de ATS o que no coinciden."""
+    plan = []
+    for r in rows:
+        if not r["id"].startswith("auto-") or r["etapa"] != "Identified" or any(r.get(k) for k in TRABAJO_HUMANO):
+            continue
+        motivo = sc.is_excluded(r["empresa"], normalize_domain(r.get("dominio")), icp)
+        if motivo:
+            plan.append((r, "eliminar", motivo))
+            continue
+        if row_key(r, grupos) not in grupos:
+            plan.append((r, "eliminar", "sin señales vigentes con las reglas actuales"))
+            continue
+        if r.get("dominio"):
+            dom, por_que = company_domain(r["empresa"], r["dominio"])
+            if dom != r["dominio"]:
+                plan.append((r, "dominio", f"{r['dominio']} -> {dom or 'null'}" + (f" ({por_que})" if por_que else "")))
+    return plan
+
+
+def apply_purge(rows: list[dict], plan: list[tuple[dict, str, str]], hoy: date | None = None) -> list[dict]:
+    borrar = {id(r) for r, accion, _ in plan if accion == "eliminar"}
+    for r, accion, motivo in plan:
+        if accion == "dominio":
+            dom, por_que = company_domain(r["empresa"], r["dominio"])
+            r["dominio"] = dom or ""
+            if por_que:
+                r["notas"] = "; ".join(x for x in (r.get("notas"), f"resolver_manual: {por_que}") if x)
+            touch(r, hoy)
+    return [r for r in rows if id(r) not in borrar]
+
+
 def clean(rows: list[dict]) -> list[dict]:
     return [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
 
@@ -319,6 +358,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--nombre", required=True); p.add_argument("--cargo", default=""); p.add_argument("--email", default="")
     p = sub.add_parser("buscar-correo"); p.add_argument("id")
     p = sub.add_parser("en-crm"); p.add_argument("id"); p.add_argument("estado", choices=EN_CRM_ONTOP)
+    p = sub.add_parser("depurar", help="limpia filas auto-* sin trabajo humano (por defecto solo muestra)")
+    p.add_argument("--aplicar", action="store_true", help="aplica los cambios; guarda copia en crm.csv.bak")
     a = ap.parse_args(argv)
 
     crm_path = Path(a.crm)
@@ -375,6 +416,22 @@ def main(argv: list[str] | None = None) -> int:
         r = _find(rows, a.id)
         r["en_crm_ontop"] = a.estado
         touch(r)
+    elif a.cmd == "depurar":
+        grupos = load_signal_groups()
+        if not grupos:
+            raise SystemExit("Falta out/signals.json: corre primero `python -m oraculo.run`")
+        plan = purge_plan(rows, icp, grupos)
+        for r, accion, motivo in plan:
+            print(f"{accion:<9} {r['id'][:32]:<32} {r['empresa'][:28]:<28} {motivo}")
+        print(f"{sum(1 for p in plan if p[1] == 'eliminar')} a eliminar, "
+              f"{sum(1 for p in plan if p[1] == 'dominio')} dominios a corregir")
+        if not a.aplicar:
+            print("(vista previa: agrega --aplicar para escribir crm.csv)")
+            return 0
+        if crm_path.exists():
+            Path(str(crm_path) + ".bak").write_bytes(crm_path.read_bytes())
+        rows = apply_purge(rows, plan)
+        recalc(rows, icp, grupos)
     if a.cmd != "validar":
         if a.cmd in ("etapa", "contacto", "buscar-correo", "en-crm"):
             recalc(rows, icp, load_signal_groups())

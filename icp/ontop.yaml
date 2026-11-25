@@ -70,14 +70,19 @@ criterios:
     nombre: Vertical
     peso: 10
     tipo: categorias
+    # Se buscan estas palabras dentro del texto del segmento ("Consultora / staffing TI" -> staffing).
+    # Sin ninguna palabra reconocible, la vertical queda null (desconocida).
     grupos:
       - puntos: 10
-        valores: [fintech, saas, tech, edtech, staffing, recruitment, reclutamiento,
-                  hr_tech, hrtech, servicios_profesionales, gig, creator, creator_economy]
+        valores: [fintech, saas, tech, edtech, staffing, recruitment, reclutamiento, hr tech, hrtech,
+                  servicios profesionales, consultora, consultoria, consultora ti, nearshore,
+                  outsourcing, gig, creator, creator economy]
       - puntos: 5
-        valores: [software, ecommerce, marketing_digital, agencia_digital, agencia, media_digital,
-                  marketplace, healthtech, proptech, legaltech, logistica_tech, gaming, ia, data]
-    resto: 0
+        valores: [software, ecommerce, e commerce, marketing digital, agencia digital, agencia,
+                  media digital, marketplace, healthtech, proptech, legaltech, gaming, ia, ai, data]
+      - puntos: 0
+        valores: [telco, telecomunicaciones, retail, manufactura, construccion, restaurante,
+                  hoteleria, mineria, agro, gobierno]
 
   - clave: tamano_etapa
     nombre: Tamaño / etapa

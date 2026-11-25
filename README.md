@@ -12,6 +12,7 @@ cp .env.example .env                                   # HUNTER_API_KEY (opciona
 .venv/bin/python -m oraculo.run --sync-crm             # fuentes -> puntaje -> crm.csv
 .venv/bin/python -m oraculo.crm recalcular
 .venv/bin/python -m oraculo.crm etapa <id> Engaged
+.venv/bin/python -m oraculo.crm depurar [--aplicar]     # limpia filas auto-* sin trabajo humano
 ```
 
 ## Lo que hace el código
@@ -29,6 +30,7 @@ cp .env.example .env                                   # HUNTER_API_KEY (opciona
 | Exclusiones | `score.is_excluded` | `excluir`: Callbook, Domu, Blinka, Mural, Revelo y Torre, por nombre o dominio. `excluir_grandes`: enterprise con entidades o EOR propios, fuera de ICP Core (Dropbox, GitLab, 6sense…). Se edita en la ICP y cada exclusión sale con su motivo. |
 | Orden | `run.sort_key` | Puntaje desc, después cobertura desc, después la señal más reciente. `--top N` (por defecto 25) define cuántos se muestran. |
 | CRM | `crm.py` | Importa la semilla y agrega columnas. Recalcula puntaje, tier y cobertura. Etapas: Identified → Researched → Contacted → Engaged → Qualified → Introduced → Activated. |
+| Depurar | `crm depurar` | Revisa las filas `auto-*` que nadie ha tocado (etapa Identified, sin contacto ni datos de investigación). Elimina las excluidas y las que ya no tienen señales con las reglas actuales, y deja en null los dominios de ATS o que no coinciden con el nombre. Por defecto solo muestra el plan; con `--aplicar` guarda una copia en `crm.csv.bak`. |
 | Compuerta | `crm.blockers` | **Contacted**: contacto corporativo válido y `en_crm_ontop` ≠ `tomado`. **Engaged o más**: `fecha_conversacion`. **Introduced o más**: `acepta_intro = si`, `contractors_n`, `paises`, `metodo_pago` y `contacto_sabe_ontop = si`. |
 | Decisores | `discover.py`, `enrich.py` | Hunter Domain Search (`--discover`) y Email Finder (`crm buscar-correo`). Solo correos del dominio de la empresa, con caché y tope de llamadas. |
 | Mensaje | `outreach.py` | Diagnóstico a partir de la señal concreta, sin nombrar ni atacar al proveedor actual. Aplica la ventana horaria de la Ley 2300 y como máximo un contacto por semana. Hasta que se llenen los datos del remitente en la ICP, el mensaje se marca como "no cumple". |
@@ -64,4 +66,5 @@ Los tests están en `tests/test_contacts.py`.
 
 - **acceso**: con `fecha_conversacion` se cuenta como contacto conocido (15). La intro cálida (15) entra como hecho `acceso: intro_calida` en las señales manuales.
 - **paises**: `crm.csv` no tiene columna de entidad extranjera. Ese hecho llega desde Get on Board (sede fuera de LATAM) o desde señales manuales. Sin él, solo suman los +5 por 3 o más países.
+- **vertical**: busca palabras clave dentro del texto de `segmento` ("Consultora / staffing TI" → staffing = 10). Si no reconoce ninguna ("Startup CO multi-país"), queda null.
 - **tamano_etapa**: Serie D o posterior = 5 aunque tenga más de 20 empleados. Bootstrapped con 20 o más empleados = 10.

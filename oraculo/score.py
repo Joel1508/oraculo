@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from .sources import Signal, ascii_lower, slug
+from .sources import Signal, ascii_lower, matches, slug
 
 
 # ---------- utilidades ----------
@@ -108,14 +108,17 @@ def _paises(c, H, hoy):
 
 
 def _categorias(c, H, hoy):
+    """Busca las palabras de cada grupo dentro del texto ('Fintech CO' -> fintech). El grupo de más
+    puntos gana. Si no hay ninguna palabra reconocible, el criterio es desconocido (null)."""
     h = H.get(c["clave"])
     if not _known(h):
         return None, None, [], None
-    v = norm_key(h["valor"])
-    for g in c["grupos"]:
-        if v in {norm_key(x) for x in g["valores"]}:
-            return g["puntos"], v, [_ev(c["clave"], h)], None
-    return c.get("resto", 0), v, [_ev(c["clave"], h)], None
+    texto = str(h["valor"])
+    for g in sorted(c["grupos"], key=lambda g: -g["puntos"]):
+        hit = matches(texto, g["valores"])
+        if hit:
+            return g["puntos"], norm_key(hit[0]), [_ev(c["clave"], h)], None
+    return None, texto, [_ev(c["clave"], h)], f"segmento no clasificable: {texto!r}"
 
 
 def _tamano_etapa(c, H, hoy):
@@ -151,7 +154,7 @@ def _max(c: dict) -> int:
     if t == "paises":
         return c["puntos_entidad_extranjera"] + c["puntos_multi_pais"]
     if t == "categorias":
-        return max(g["puntos"] for g in c["grupos"])
+        return max(g["puntos"] for g in c["grupos"])  # sin coincidencia: null
     if t == "tamano_etapa":
         return max(c["puntos_medio"], c["puntos_otro"])
     raise ValueError(f"tipo de criterio desconocido: {t}")

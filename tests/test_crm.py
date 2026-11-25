@@ -138,3 +138,38 @@ def test_contador_importar_nueva_no_es_actualizada(tmp_path):
     seed.write_text(SEED_HEADER + "\n7,Acme,fintech,,,,,72,,,,,,nota nueva\n", encoding="utf-8")
     rows, nuevos, act = crm.import_seed(seed, rows, HOY)
     assert (nuevos, act) == (0, 1)
+
+
+def test_reimportar_no_vuelve_a_llenar_tier(tmp_path, icp):
+    seed = tmp_path / "seed.csv"
+    seed.write_text(SEED_HEADER + "\n7,Acme,Startup CO,,,,,45,Sin tier (falta conversación),,,,,\n", encoding="utf-8")
+    rows, _, _ = crm.import_seed(seed, [], HOY)
+    crm.recalc(rows, icp, hoy=HOY)
+    assert rows[0]["tier"] == ""
+    rows, nuevos, act = crm.import_seed(seed, rows, HOY)
+    assert (nuevos, act) == (0, 0) and rows[0]["tier"] == ""
+
+
+def _auto(id_, empresa, dominio="", **kw):
+    r = fila(id=id_, empresa=empresa, dominio=dominio)
+    r.update(kw)
+    return r
+
+
+def test_depurar(icp):
+    from oraculo.sources import Signal, group_by_domain
+    g = group_by_domain([Signal("D2B", "vacante", "x", "Get on Board"),
+                         Signal("Acme", "vacante", "y", "Get on Board", dominio="acme.com")])
+    rows = [_auto("auto-dropbox", "Dropbox", "jobs.dropbox.com"),
+            _auto("auto-datvacom", "Edward Hulton", "datva.com"),          # sin señales vigentes
+            _auto("auto-d2b", "D2B", "jobs.workable.com"),                 # ATS -> null
+            _auto("auto-acme", "Acme", "acme.com"),                        # bien: no se toca
+            _auto("auto-tocada", "Edward Hulton", "datva.com", contacto_nombre="X", contacto_fuente="manual"),
+            _auto("1", "GitLab")]                                          # de la semilla: no se toca
+    plan = crm.purge_plan(rows, icp, g)
+    acciones = {r["id"]: a for r, a, _ in plan}
+    assert acciones == {"auto-dropbox": "eliminar", "auto-datvacom": "eliminar", "auto-d2b": "dominio"}
+    out = crm.apply_purge(rows, plan, HOY)
+    assert [r["id"] for r in out] == ["auto-d2b", "auto-acme", "auto-tocada", "1"]
+    d2b = out[0]
+    assert d2b["dominio"] == "" and "resolver_manual" in d2b["notas"] and "ATS" in d2b["notas"]
