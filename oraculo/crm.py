@@ -118,7 +118,8 @@ def import_seed(seed_path: Path, rows: list[dict], hoy: date | None = None) -> t
     for s in seed:
         s = {k: _s(v) for k, v in s.items()}
         r = by_id.get(s["id"])
-        if r is None:
+        es_nueva = r is None
+        if es_nueva:
             r = {c: "" for c in COLUMNS}
             rows.append(r)
             by_id[s["id"]] = r
@@ -132,9 +133,10 @@ def import_seed(seed_path: Path, rows: list[dict], hoy: date | None = None) -> t
             r["puntaje"] = r["puntaje_publico"]
             cambio = True
         r.update(normalize(r))
-        if cambio:
-            actualizados += 1
+        if es_nueva or cambio:
             touch(r, hoy)
+        if cambio and not es_nueva:  # una fila nueva no cuenta como actualizada
+            actualizados += 1
     return rows, nuevos, actualizados
 
 
@@ -329,12 +331,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{n} filas nuevas, {u} actualizadas -> {crm_path}")
     elif a.cmd == "recalcular":
         recalc(rows, icp, load_signal_groups())
-        for r in sorted(rows, key=lambda r: -int(r["puntaje"] or 0)):
+        for r in sorted(rows, key=lambda r: (-int(r["puntaje"] or 0), -int(r["cobertura"] or 0))):
             s = r["_score"]
             print(f"{r['id']:>4} {r['empresa'][:28]:<28} {r['puntaje']:>3} {r['tier'] or '-':<3} "
                   f"cobertura {r['cobertura']:>3}%  desconocidos: {', '.join(d['criterio'] for d in s['desconocidos']) or '-'}"
                   + (f"  DESCALIFICADO: {'; '.join(m['motivo'] for m in s['motivos'])}" if s["descalificado"] else "")
-                  + ("  EXCLUIDO (lista excluir de la ICP)" if s["excluido"] else ""))
+                  + (f"  EXCLUIDO: {s['excluido']}" if s["excluido"] else ""))
     elif a.cmd == "validar":
         malos = 0
         for r in rows:

@@ -19,12 +19,15 @@ cp .env.example .env                                   # HUNTER_API_KEY (opciona
 | Paso | Módulo | Qué hace |
 |---|---|---|
 | Señales automáticas | `sources/getonboard.py` | API pública de Get on Board (`/api/v0/search/jobs`): vacantes remotas freelance o que mencionan contractor/LATAM. Trae el dominio y el país de la empresa. Si la sede está fuera de LATAM, registra el hecho `entidad_extranjera`. |
-| | `sources/remoteok.py` | API JSON de Remote OK, filtrada por LATAM/Colombia/contractor. Cada señal enlaza a la vacante en Remote OK y la nombra como fuente, como piden sus términos. No usa su logo. |
-| | `sources/wwr.py` | RSS de We Work Remotely, con el mismo filtro. Saca el dominio de la URL de la empresa que trae el aviso. |
+| | `sources/remoteok.py` | API JSON de Remote OK. Cada señal enlaza a la vacante en Remote OK y la nombra como fuente, como piden sus términos. No usa su logo. Remote OK no publica el dominio de la empresa, así que esas empresas quedan con `resolver_manual`. |
+| | `sources/wwr.py` | RSS de We Work Remotely. Saca el dominio de la URL de la empresa que trae el aviso. |
+| Filtro estricto (Remote OK, WWR) | `sources.global_filter` | Una vacante se queda solo si la ubicación o el texto mencionan LATAM, Latin America, South America, Colombia, México, Argentina, Chile, Perú o contractor. Se descarta si la ubicación es global o de otra región (Worldwide, USA only, Europe…) o está vacía. La salida cuenta los descartes por fuente y motivo. Las listas se editan en `filtro_global`. |
+| Dominio | `sources.company_domain` | Nunca toma como dominio un ATS (Workable, Lever, Greenhouse, Ashby, BambooHR, Breezy, Recruitee…). `jobs.`, `careers.`, `boards.` y `apply.` se reducen al dominio raíz (`jobs.dropbox.com` → `dropbox.com`). Si el nombre no corresponde al dominio (p. ej. «Edward Hulton» y datva.com), el dominio queda en null. En todos esos casos la empresa queda marcada con `resolver_manual`. |
 | Señales curadas | `sources/manual_signals.py` | Lee `data/manual_signals.json`. Una señal sin URL de fuente hace fallar la carga. |
 | Agrupar | `sources.group_by_domain` | Agrupa las señales por dominio. Una señal sin dominio se une por nombre; si no se puede, queda como `sin-dominio:<nombre>` para resolverla a mano. |
 | Puntaje | `score.py` | 0-100 con los pesos de la ICP. Un dato desconocido vale `null` y suma 0. Cada puntaje lista los criterios conocidos con la fuente y la URL de cada dato, los desconocidos y la `cobertura` (peso con datos). Los descalificadores dejan el puntaje en 0 con su motivo. Asigna tiers T1/T2/T3. |
-| Exclusiones | `score.is_excluded` | Callbook, Domu, Blinka, Mural, Revelo y Torre, por nombre o dominio. |
+| Exclusiones | `score.is_excluded` | `excluir`: Callbook, Domu, Blinka, Mural, Revelo y Torre, por nombre o dominio. `excluir_grandes`: enterprise con entidades o EOR propios, fuera de ICP Core (Dropbox, GitLab, 6sense…). Se edita en la ICP y cada exclusión sale con su motivo. |
+| Orden | `run.sort_key` | Puntaje desc, después cobertura desc, después la señal más reciente. `--top N` (por defecto 25) define cuántos se muestran. |
 | CRM | `crm.py` | Importa la semilla y agrega columnas. Recalcula puntaje, tier y cobertura. Etapas: Identified → Researched → Contacted → Engaged → Qualified → Introduced → Activated. |
 | Compuerta | `crm.blockers` | **Contacted**: contacto corporativo válido y `en_crm_ontop` ≠ `tomado`. **Engaged o más**: `fecha_conversacion`. **Introduced o más**: `acepta_intro = si`, `contractors_n`, `paises`, `metodo_pago` y `contacto_sabe_ontop = si`. |
 | Decisores | `discover.py`, `enrich.py` | Hunter Domain Search (`--discover`) y Email Finder (`crm buscar-correo`). Solo correos del dominio de la empresa, con caché y tope de llamadas. |

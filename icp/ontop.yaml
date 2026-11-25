@@ -105,12 +105,27 @@ descalificadores:   # cualquiera deja el puntaje en 0, sin tier, con el motivo
 
 excluir: [Callbook, Domu, Blinka, Mural, Revelo, Torre]
 
+# Grandes empresas fuera de ICP Core. Editable: agrega o quita nombres.
+excluir_grandes:
+  motivo: "Enterprise con entidades/EOR propios, fuera de ICP Core"
+  empresas: [Dropbox, GitLab, 6sense, Mixpanel, LaunchDarkly, Oscar Health, Clover Health,
+             Glossier, Gemini, OKX, MetaMask, Ensono]
+
 tiers:
   - {nombre: T1, min: 80}
   - {nombre: T2, min: 60}
   - {nombre: T3, min: 40}
 
-# Filtro de vacantes para Get on Board, Remote OK y We Work Remotely.
+# Filtro estricto de Remote OK y We Work Remotely (bolsas globales, mucho ruido).
+# La vacante se queda solo si la ubicación o el texto mencionan alguna de estas palabras.
+# Una ubicación global, de otra región o vacía se descarta aunque el texto mencione algo.
+filtro_global:
+  mencionar: [latam, latin america, south america, colombia, mexico, argentina, chile, peru,
+              contractor, contractors]
+  ubicaciones_descartar: [worldwide, anywhere, anywhere in the world, global, usa only, us only,
+                          usa, us, united states, north america, canada, europe, emea, uk, apac]
+
+# Etiquetas de coincidencia de Get on Board (bolsa LATAM) y datos de las señales.
 filtros_vacantes:
   latam: [latam, latin america, latinoamerica, south america, sudamerica, colombia, mexico,
           argentina, brazil, brasil, chile, peru, uruguay, ecuador, costa rica, guatemala,

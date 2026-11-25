@@ -152,11 +152,11 @@ def test_tamano_etapa(icp, emp, etapa, pts):
 @pytest.mark.parametrize("nombre,dominio", [("Callbook", None), ("TORRE", None), ("Otra", "revelo.com"),
                                             ("Mural", "mural.co"), ("Domu", None), ("Blinka", None)])
 def test_excluidos(icp, nombre, dominio):
-    assert sc.is_excluded(nombre, dominio, icp)
+    assert sc.is_excluded(nombre, dominio, icp) == "En la lista 'excluir' de la ICP"
 
 
 def test_no_excluido(icp):
-    assert not sc.is_excluded("Acme", "acme.com", icp)
+    assert sc.is_excluded("Acme", "acme.com", icp) is None
 
 
 def test_hechos_desde_senales_prioriza_manual():
@@ -165,3 +165,30 @@ def test_hechos_desde_senales_prioriza_manual():
           Signal("A", "ronda", "y", "Crunchbase", "https://c", "2026-08-01", criterio="disparador",
                  valor={"tipo": "ronda", "fecha": "2026-08-01"}, manual=True)]
     assert sc.facts_from_signals(ss)["disparador"]["fuente"] == "Crunchbase"
+
+
+# ---------- ajuste 3: excluir_grandes ----------
+
+@pytest.mark.parametrize("nombre", ["Dropbox", "GitLab", "6sense", "Mixpanel", "LaunchDarkly", "Oscar Health",
+                                    "Clover Health", "Glossier", "Gemini", "OKX", "MetaMask", "Ensono"])
+def test_excluir_grandes(icp, nombre):
+    assert "fuera de ICP Core" in sc.is_excluded(nombre, None, icp)
+
+
+def test_excluir_grandes_es_editable(icp):
+    import copy
+    i = copy.deepcopy(icp)
+    i["excluir_grandes"]["empresas"].remove("Dropbox")
+    i["excluir_grandes"]["empresas"].append("Acme")
+    assert sc.is_excluded("Dropbox", "dropbox.com", i) is None
+    assert sc.is_excluded("Acme", None, i)
+
+
+def test_excluidos_grandes_no_salen_en_prospectos(icp):
+    from oraculo import run
+    from oraculo.sources import group_by_domain
+    g = group_by_domain([Signal("Dropbox", "vacante", "x", "Get on Board", dominio="dropbox.com"),
+                         Signal("Acme", "vacante", "y", "Get on Board", dominio="acme.com")])
+    ps, ex = run.build(icp, g, [])
+    assert [p["nombre"] for p in ps] == ["Acme"]
+    assert ex == [{"nombre": "Dropbox", "motivo": icp["excluir_grandes"]["motivo"]}]

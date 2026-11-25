@@ -127,3 +127,14 @@ def test_excluido_en_crm_queda_en_cero(icp):
     r = fila(empresa="Torre", dominio="torre.co", segmento="hr-tech")
     crm.recalc([r], icp, hoy=HOY)
     assert r["puntaje"] == "0" and r["tier"] == "" and r["_score"]["excluido"]
+
+
+def test_contador_importar_nueva_no_es_actualizada(tmp_path):
+    seed = tmp_path / "seed.csv"
+    seed.write_text(SEED_HEADER + "\n7,Acme,fintech,,,,,72,,,,,,\n8,Beta,saas,,,,,50,,,,,,\n", encoding="utf-8")
+    rows, nuevos, act = crm.import_seed(seed, [], HOY)
+    assert (nuevos, act) == (2, 0)
+    rows[0]["notas"] = ""
+    seed.write_text(SEED_HEADER + "\n7,Acme,fintech,,,,,72,,,,,,nota nueva\n", encoding="utf-8")
+    rows, nuevos, act = crm.import_seed(seed, rows, HOY)
+    assert (nuevos, act) == (0, 1)

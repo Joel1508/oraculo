@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from . import TIMEOUT, USER_AGENT, Signal, normalize_domain, strip_html, vacancy_hits
+from . import TIMEOUT, USER_AGENT, Signal, company_domain, strip_html, vacancy_hits
 
 BASE = "https://www.getonbrd.com/api/v0/search/jobs"
 FREELANCE = "3"
@@ -37,9 +37,10 @@ def parse(jobs: list[dict], icp: dict) -> list[Signal]:
         fecha = (datetime.fromtimestamp(a["published_at"], timezone.utc).isoformat()
                  if a.get("published_at") else None)
         url = (j.get("links") or {}).get("public_url")
-        dominio = normalize_domain(comp.get("web"))
+        dominio, resolver = company_domain(comp["name"], comp.get("web"))
         datos = {"coincidencias": hits, "modalidad": "freelance" if modalidad == FREELANCE else modalidad,
-                 "pais_empresa": comp.get("country"), "remote_modality": a.get("remote_modality")}
+                 "pais_empresa": comp.get("country"), "remote_modality": a.get("remote_modality"),
+                 "url_empresa": comp.get("web"), "resolver_manual": resolver}
         out.append(Signal(
             empresa=comp["name"].strip(), tipo="vacante",
             texto=f"Publicó la vacante remota «{a.get('title')}» en Get on Board"

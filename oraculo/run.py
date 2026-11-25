@@ -17,7 +17,7 @@ import json
 import os
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -53,7 +53,8 @@ def collect(icp: dict, only: list[str] | None) -> tuple[list[Signal], list[dict]
         try:
             got = importlib.import_module(f"oraculo.sources.{name}").fetch(cfg or {}, icp)
             signals += got
-            log.append({"fuente": name, "ok": True, "senales": len(got)})
+            log.append({"fuente": name, "ok": True, "senales": len(got),
+                        "descartadas": dict(getattr(got, "descartadas", {}))})
         except Exception as e:  # una fuente caída no tumba el pipeline
             log.append({"fuente": name, "ok": False, "error": f"{type(e).__name__}: {e}"})
             print(f"[aviso] fuente {name} falló: {e}", file=sys.stderr)
@@ -65,7 +66,20 @@ def _best_signal(ss: list[Signal]) -> Signal | None:
     return sorted(cand, key=lambda s: (s.manual, s.fecha or ""), reverse=True)[0] if cand else None
 
 
-def build(icp: dict, grupos: dict[str, list[Signal]], rows: list[dict]) -> tuple[list[dict], list[str]]:
+def _ts(fecha) -> float:
+    try:
+        d = datetime.fromisoformat(str(fecha).replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def sort_key(p: dict) -> tuple:
+    """Puntaje desc, cobertura desc, señal más reciente primero, nombre."""
+    return (-p["puntaje"], -p["cobertura"], -_ts(p.get("fecha_ultima_senal")), p["nombre"])
+
+
+def build(icp: dict, grupos: dict[str, list[Signal]], rows: list[dict]) -> tuple[list[dict], list[dict]]:
     by_key = {crm.row_key(r, grupos): r for r in rows}
     keys = list(dict.fromkeys(list(grupos) + list(by_key)))
     prospects, excluded = [], []
@@ -73,20 +87,25 @@ def build(icp: dict, grupos: dict[str, list[Signal]], rows: list[dict]) -> tuple
         ss, row = grupos.get(k, []), by_key.get(k)
         nombre = row["empresa"] if row else Counter(s.empresa for s in ss).most_common(1)[0][0]
         dominio = None if k.startswith("sin-dominio:") else k
-        if score.is_excluded(nombre, dominio, icp):
-            excluded.append(nombre)
+        motivo = score.is_excluded(nombre, dominio, icp)
+        if motivo:
+            excluded.append({"nombre": nombre, "motivo": motivo})
             continue
+        resolver = [] if dominio else sorted({s.datos.get("resolver_manual") for s in ss
+                                              if s.datos.get("resolver_manual")} or {"sin dominio"})
+        fechas = [s.fecha for s in ss if s.fecha]
         hechos = {**score.facts_from_signals(ss), **(crm.facts_from_row(row) if row else {})}
         res = score.score(hechos, icp)
         best = _best_signal(ss)
         prospects.append({
             "id": row["id"] if row else None, "clave": k, "nombre": nombre, "dominio": dominio,
             "en_crm": bool(row), "etapa": row["etapa"] if row else None, **res,
+            "resolver_manual": resolver, "fecha_ultima_senal": max(fechas, key=_ts) if fechas else None,
             "senal_principal": best.to_dict() if best else (
                 {"texto": row["senal_publica"], "fuente": row.get("fuente"), "url": None} if row and row.get("senal_publica") else None),
             "senales": [s.to_dict() for s in ss],
         })
-    prospects.sort(key=lambda p: (-p["puntaje"], -p["cobertura"], p["nombre"]))
+    prospects.sort(key=sort_key)
     for i, p in enumerate(prospects, 1):
         p["rank"] = i
     return prospects, excluded
@@ -106,7 +125,8 @@ def sync_rows(prospects: list[dict], rows: list[dict], min_puntaje: int) -> int:
         r = {c: "" for c in crm.COLUMNS}
         r.update({"id": rid, "empresa": p["nombre"], "dominio": p["dominio"] or "",
                   "senal_publica": s.get("texto", ""), "fuente": f"{s.get('fuente', '')} {s.get('url') or ''}".strip(),
-                  "desconocido": ", ".join(d["criterio"] for d in p["desconocidos"])})
+                  "desconocido": ", ".join(d["criterio"] for d in p["desconocidos"]),
+                  "notas": ("resolver_manual: " + "; ".join(p["resolver_manual"])) if p["resolver_manual"] else ""})
         r = crm.normalize(r)
         crm.touch(r)
         rows.append(r)
@@ -181,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-puntaje", type=int, default=15, help="puntaje mínimo para --sync-crm")
     ap.add_argument("--discover", action="store_true", help="Hunter Domain Search para filas sin contacto")
     ap.add_argument("--solo-cache", action="store_true", help="Hunter solo desde caché (no gasta créditos)")
+    ap.add_argument("--top", type=int, default=25, help="cuántos prospectos mostrar en pantalla")
     a = ap.parse_args(argv)
 
     load_env()
@@ -207,7 +228,8 @@ def main(argv: list[str] | None = None) -> int:
 
     doc = {"generado": datetime.now(outreach.TZ).isoformat(timespec="seconds"),
            "vendedor": icp["vendedor"]["empresa"], "criterios": icp["criterios"],
-           "excluidos": icp.get("excluir", []), "excluidos_encontrados": sorted(set(excluded)),
+           "excluidos": icp.get("excluir", []), "excluidos_grandes": (icp.get("excluir_grandes") or {}).get("empresas", []),
+           "excluidos_encontrados": excluded,
            "fuentes": log, "atribucion": "Vacantes de Remote OK (https://remoteok.com), Get on Board y We Work Remotely; cada señal enlaza a su fuente.",
            "prospectos": prospects}
     (out / "prospects_full.json").write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -217,14 +239,22 @@ def main(argv: list[str] | None = None) -> int:
                                                        encoding="utf-8")
 
     for x in log:
-        print(f"fuente {x['fuente']}: " + (f"{x['senales']} señales" if x["ok"] else f"ERROR {x['error']}"))
+        if not x["ok"]:
+            print(f"fuente {x['fuente']}: ERROR {x['error']}")
+            continue
+        d = x["descartadas"]
+        detalle = f", {sum(d.values())} descartadas ({', '.join(f'{k} {v}' for k, v in sorted(d.items()))})" if d else ""
+        print(f"fuente {x['fuente']}: {x['senales']} señales{detalle}")
     for line in hunter_log:
         print(f"hunter {line}")
-    for p in prospects[:25]:
+    for p in prospects[: a.top]:
         flag = " DESCALIFICADO" if p["descalificado"] else ""
+        flag += " [resolver dominio]" if p["resolver_manual"] else ""
         print(f"{p['rank']:>3}. {p['nombre'][:30]:<30} {p['puntaje']:>3}/100 {p['tier'] or '-':<3} "
-              f"cobertura {p['cobertura']:>3}%{flag}")
-    print(f"{len(prospects)} prospectos, {len(set(excluded))} excluidos, {nuevos} filas nuevas en CRM "
+              f"cobertura {p['cobertura']:>3}%  {(p['fecha_ultima_senal'] or '')[:10]:<10}{flag}")
+    if excluded:
+        print("excluidos: " + ", ".join(sorted({e["nombre"] for e in excluded})))
+    print(f"{len(prospects)} prospectos, {len(excluded)} excluidos, {nuevos} filas nuevas en CRM "
           f"-> {out}/prospects_full.json, {a.public}/prospects.json")
     return 0
 

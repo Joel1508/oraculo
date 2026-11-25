@@ -211,10 +211,15 @@ def disqualify(H: dict[str, dict], icp: dict) -> list[dict]:
     return out
 
 
-def is_excluded(nombre: str | None, dominio: str | None, icp: dict) -> bool:
-    ex = {slug(x) for x in icp.get("excluir", [])}
+def is_excluded(nombre: str | None, dominio: str | None, icp: dict) -> str | None:
+    """Motivo de exclusión, o None. 'excluir' compara nombre o dominio; 'excluir_grandes' solo nombre."""
     etiqueta = slug((dominio or "").split(".")[0]) if dominio else ""
-    return slug(nombre) in ex or (etiqueta in ex)
+    if slug(nombre) in {slug(x) for x in icp.get("excluir", [])} or etiqueta in {slug(x) for x in icp.get("excluir", [])}:
+        return "En la lista 'excluir' de la ICP"
+    grandes = icp.get("excluir_grandes") or {}
+    if slug(nombre) in {slug(x) for x in grandes.get("empresas", [])}:
+        return grandes.get("motivo", "En la lista 'excluir_grandes' de la ICP")
+    return None
 
 
 def tier(puntaje: int, icp: dict) -> str | None:
