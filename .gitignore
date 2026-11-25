@@ -1,0 +1,19 @@
+# Secretos
+.env
+.env.*
+!.env.example
+
+# Datos personales y de trabajo (Ley 1581): nunca al repo público
+crm.csv
+crm.csv.bak
+data/seed/
+data/manual_signals.json
+out/
+*.cache.json
+.*_cache.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

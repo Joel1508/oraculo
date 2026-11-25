@@ -1,0 +1,22 @@
+{
+  "_nota": "Ejemplo con datos ficticios. Copia a data/manual_signals.json (ignorado por git). Cada señal exige 'url'. Fuentes: YC, Crunchbase, Clutch, Wellfound, Fedesoft, prensa; leídas a mano, sin scraping.",
+  "empresas": [
+    {
+      "nombre": "Ejemplo Staffing SAS",
+      "dominio": "ejemplo-staffing.example",
+      "senales": [
+        {"tipo": "ronda", "texto": "Anunció una ronda Serie A", "fuente": "Prensa (ejemplo)",
+         "url": "https://example.com/noticia-ronda", "fecha": "2026-09-15",
+         "criterio": "disparador", "valor": {"tipo": "ronda", "fecha": "2026-09-15"}},
+        {"tipo": "hecho", "texto": "Serie A", "fuente": "Crunchbase", "url": "https://example.com/perfil",
+         "criterio": "etapa", "valor": "Serie A"},
+        {"tipo": "hecho", "texto": "Equipo de 45 personas", "fuente": "Wellfound", "url": "https://example.com/wellfound",
+         "criterio": "empleados", "valor": 45},
+        {"tipo": "hecho", "texto": "Firma de staffing tech", "fuente": "Clutch", "url": "https://example.com/clutch",
+         "criterio": "vertical", "valor": "staffing"},
+        {"tipo": "hecho", "texto": "Sede en Delaware, equipo en Colombia, México y Argentina", "fuente": "YC",
+         "url": "https://example.com/yc", "criterio": "entidad_extranjera", "valor": true}
+      ]
+    }
+  ]
+}

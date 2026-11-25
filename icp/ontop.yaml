@@ -1,0 +1,179 @@
+# ICP de Ontop: empresas que pagan contractors en LATAM.
+# Los pesos suman 100 y cada peso es también el máximo de puntos del criterio.
+# Un criterio sin dato vale null: suma 0 y aparece en "desconocidos".
+
+vendedor:
+  empresa: Ontop
+  descripcion: "Ontop ayuda a empresas a contratar y pagar contractors en LATAM desde una sola plataforma."
+  # Quien firma el mensaje. Mientras sean marcadores, outreach marca el mensaje como "no cumple".
+  remitente: "<tu nombre>"
+  cargo: "<tu cargo>"
+  empresa_remitente: "<tu empresa>"
+  url_baja: "<url o correo para darse de baja>"
+
+criterios:
+  - clave: contractors_activos
+    nombre: Contractors activos
+    peso: 25
+    tipo: rangos
+    rangos:
+      - {min: 1, max: 9, puntos: 5}
+      - {min: 10, max: 19, puntos: 15}
+      - {min: 20, max: 49, puntos: 20}
+      - {min: 50, puntos: 25}
+
+  - clave: metodo_pago
+    nombre: Método de pago actual
+    peso: 15
+    tipo: opciones
+    opciones:
+      wise: 15
+      payoneer: 15
+      transferencia: 15
+      manual: 15
+      deel_insatisfecho: 10
+      remote_insatisfecho: 10
+      deel_satisfecho: 0
+      remote_satisfecho: 0
+      desconocido: null
+    seguimiento: [deel_satisfecho, remote_satisfecho]   # 0 puntos, pero queda para seguimiento
+
+  - clave: acceso
+    nombre: Acceso al decisor
+    peso: 15
+    tipo: opciones
+    opciones:
+      intro_calida: 15
+      contacto_conocido: 15   # también: ya hubo conversación (fecha_conversacion)
+      verified: 10            # decisor con correo corporativo verificado por Hunter
+      accept_all: 4           # dominio acepta todo: correo no verificable
+      solo_dominio: 0
+      unknown: null           # contacto sin email_status: sin puntos de acceso
+
+  - clave: disparador
+    nombre: Disparador reciente
+    peso: 15
+    tipo: disparador
+    ventana_dias: {vacante: 60, ronda: 183}   # ronda < 6 meses
+    puntos_reciente: 15
+    puntos_viejo_o_debil: 7
+
+  - clave: paises
+    nombre: Países / entidad extranjera
+    peso: 10
+    tipo: paises
+    puntos_entidad_extranjera: 5   # entidad extranjera pagando a talento LATAM
+    puntos_multi_pais: 5           # +5 si son 3 o más países
+    min_paises: 3
+
+  - clave: vertical
+    nombre: Vertical
+    peso: 10
+    tipo: categorias
+    grupos:
+      - puntos: 10
+        valores: [fintech, saas, tech, edtech, staffing, recruitment, reclutamiento,
+                  hr_tech, hrtech, servicios_profesionales, gig, creator, creator_economy]
+      - puntos: 5
+        valores: [software, ecommerce, marketing_digital, agencia_digital, agencia, media_digital,
+                  marketplace, healthtech, proptech, legaltech, logistica_tech, gaming, ia, data]
+    resto: 0
+
+  - clave: tamano_etapa
+    nombre: Tamaño / etapa
+    peso: 10
+    tipo: tamano_etapa
+    empleados_min: 20
+    etapas_medias: [serie_a, serie_b, serie_c]          # 10 puntos
+    etapas_tardias: [serie_d, serie_e, serie_f, ipo, publica]  # 5 puntos
+    puntos_medio: 10
+    puntos_otro: 5   # <20 empleados, seed o bootstrapped (no se penaliza: staffing encaja)
+
+descalificadores:   # cualquiera deja el puntaje en 0, sin tier, con el motivo
+  - clave: solo_eor
+    si: true
+    motivo: "Necesita solo EOR (empleados formales), no pago de contractors"
+  - clave: sin_contractors_ni_plan
+    si: true
+    motivo: "No tiene contractors ni plan de contratarlos"
+  - clave: fuerza_laboral_domestica
+    si: true
+    motivo: "Su fuerza laboral es puramente doméstica"
+  - clave: en_crm_ontop
+    si: tomado
+    motivo: "Ya está en el CRM de Ontop"
+
+excluir: [Callbook, Domu, Blinka, Mural, Revelo, Torre]
+
+tiers:
+  - {nombre: T1, min: 80}
+  - {nombre: T2, min: 60}
+  - {nombre: T3, min: 40}
+
+# Filtro de vacantes para Get on Board, Remote OK y We Work Remotely.
+filtros_vacantes:
+  latam: [latam, latin america, latinoamerica, south america, sudamerica, colombia, mexico,
+          argentina, brazil, brasil, chile, peru, uruguay, ecuador, costa rica, guatemala,
+          bolivia, paraguay, panama, dominican republic, republica dominicana, venezuela,
+          el salvador, honduras, nicaragua]
+  contractor: [contractor, contractors, independent contractor, freelance, freelancer, contract,
+               b2b contract, contratista, prestacion de servicios]
+
+fuentes:
+  manual_signals:
+    archivo: data/manual_signals.json
+  getonboard:
+    consultas: [contractor, freelance, latam]
+    por_pagina: 50
+    max_paginas: 2
+  remoteok: {}
+  wwr:
+    feeds: [https://weworkremotely.com/remote-jobs.rss]
+
+descubrimiento:            # Hunter Domain Search (solo con --discover)
+  max_llamadas: 5
+  limite: 10
+  confianza_minima: 70
+  palabras_clave: [founder, cofounder, co-founder, ceo, chief executive, coo, chief operating,
+                   cfo, chief financial, head of people, people, hr, human resources,
+                   talent, head of operations, operations, ops, fundador, cofundador,
+                   gerente general, talento humano, recursos humanos, operaciones, finanzas]
+  roles:                   # primera regla que aplica, en orden
+    decisor:
+      alguna: [founder, cofounder, co-founder, fundador, cofundador, ceo, chief executive, gerente general]
+    aprobador:
+      alguna: [coo, chief operating, cfo, chief financial, finanzas]
+    influenciador:
+      alguna: [people, hr, human resources, talent, talento humano, recursos humanos,
+               operations, ops, operaciones]
+
+mensaje:
+  plantilla_con_paises: |
+    Hola {nombre},
+
+    Soy {remitente}, {cargo} en {empresa_remitente}. Le escribo por su cargo en {empresa}: {senal}.
+
+    Vi que están contratando contractors en {paises}. ¿Han evaluado si su estructura actual es la más eficiente para gestionar y pagarles?
+
+    {descripcion_vendedor} Si le sirve, le comparto un diagnóstico de 15 minutos.
+
+    {remitente}
+    Si prefiere no recibir más mensajes, responda "baja" o use {url_baja}.
+  plantilla_sin_paises: |
+    Hola {nombre},
+
+    Soy {remitente}, {cargo} en {empresa_remitente}. Le escribo por su cargo en {empresa}: {senal}.
+
+    ¿Han evaluado si su estructura actual es la más eficiente para gestionar y pagar a sus contractors?
+
+    {descripcion_vendedor} Si le sirve, le comparto un diagnóstico de 15 minutos.
+
+    {remitente}
+    Si prefiere no recibir más mensajes, responda "baja" o use {url_baja}.
+  # Nombres que el mensaje nunca menciona (no se ataca al proveedor actual)
+  proveedores: [deel, remote.com, oyster, rippling, papaya, multiplier, wise, payoneer, husky, letsdeel]
+  max_contactos_por_semana: 1
+  ventana:                 # Ley 2300 de 2023, hora de Bogotá
+    lunes_viernes: ["07:00", "19:00"]
+    sabado: ["08:00", "15:00"]
+  festivos: [2026-12-08, 2026-12-25, 2027-01-01, 2027-01-11, 2027-03-22, 2027-03-25, 2027-03-26]

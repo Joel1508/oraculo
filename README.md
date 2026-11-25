@@ -1,0 +1,64 @@
+# Oráculo
+
+Prospección B2B con señales públicas y puntaje explicable. La primera ICP es **Ontop**:
+empresas que contratan y pagan contractors en LATAM (`icp/ontop.yaml`).
+
+```bash
+uv venv -p 3.12 .venv && uv pip install -p .venv/bin/python -r requirements.txt
+cp .env.example .env                                   # HUNTER_API_KEY (opcional)
+.venv/bin/python -m pytest -q
+
+.venv/bin/python -m oraculo.crm importar data/seed/ontop_crm_v0.csv
+.venv/bin/python -m oraculo.run --sync-crm             # fuentes -> puntaje -> crm.csv
+.venv/bin/python -m oraculo.crm recalcular
+.venv/bin/python -m oraculo.crm etapa <id> Engaged
+```
+
+## Lo que hace el código
+
+| Paso | Módulo | Qué hace |
+|---|---|---|
+| Señales automáticas | `sources/getonboard.py` | API pública de Get on Board (`/api/v0/search/jobs`): vacantes remotas freelance o que mencionan contractor/LATAM. Trae el dominio y el país de la empresa. Si la sede está fuera de LATAM, registra el hecho `entidad_extranjera`. |
+| | `sources/remoteok.py` | API JSON de Remote OK, filtrada por LATAM/Colombia/contractor. Cada señal enlaza a la vacante en Remote OK y la nombra como fuente, como piden sus términos. No usa su logo. |
+| | `sources/wwr.py` | RSS de We Work Remotely, con el mismo filtro. Saca el dominio de la URL de la empresa que trae el aviso. |
+| Señales curadas | `sources/manual_signals.py` | Lee `data/manual_signals.json`. Una señal sin URL de fuente hace fallar la carga. |
+| Agrupar | `sources.group_by_domain` | Agrupa las señales por dominio. Una señal sin dominio se une por nombre; si no se puede, queda como `sin-dominio:<nombre>` para resolverla a mano. |
+| Puntaje | `score.py` | 0-100 con los pesos de la ICP. Un dato desconocido vale `null` y suma 0. Cada puntaje lista los criterios conocidos con la fuente y la URL de cada dato, los desconocidos y la `cobertura` (peso con datos). Los descalificadores dejan el puntaje en 0 con su motivo. Asigna tiers T1/T2/T3. |
+| Exclusiones | `score.is_excluded` | Callbook, Domu, Blinka, Mural, Revelo y Torre, por nombre o dominio. |
+| CRM | `crm.py` | Importa la semilla y agrega columnas. Recalcula puntaje, tier y cobertura. Etapas: Identified → Researched → Contacted → Engaged → Qualified → Introduced → Activated. |
+| Compuerta | `crm.blockers` | **Contacted**: contacto corporativo válido y `en_crm_ontop` ≠ `tomado`. **Engaged o más**: `fecha_conversacion`. **Introduced o más**: `acepta_intro = si`, `contractors_n`, `paises`, `metodo_pago` y `contacto_sabe_ontop = si`. |
+| Decisores | `discover.py`, `enrich.py` | Hunter Domain Search (`--discover`) y Email Finder (`crm buscar-correo`). Solo correos del dominio de la empresa, con caché y tope de llamadas. |
+| Mensaje | `outreach.py` | Diagnóstico a partir de la señal concreta, sin nombrar ni atacar al proveedor actual. Aplica la ventana horaria de la Ley 2300 y como máximo un contacto por semana. Hasta que se llenen los datos del remitente en la ICP, el mensaje se marca como "no cumple". |
+| Fase 2 (interfaz) | `enrich_company.py` | Contrato Pydantic para extraer datos de **empresa** desde una URL pública con Claude. Cada campo lleva su cita y su URL; sin cita, el campo es null. Aún no está implementado. |
+
+## Lo que se investiga a mano
+
+El código no hace scraping de estas fuentes. Se leen en el navegador y se registran con su URL:
+
+- **YC, Crunchbase, Clutch, Wellfound, Fedesoft y prensa** → `data/manual_signals.json`, con URL obligatoria. Ejemplo en `data/manual_signals.example.json`. De aquí salen rondas, etapa, número de empleados, vertical y entidad extranjera.
+- **Lo que solo se sabe conversando** → columnas de `crm.csv`: `contractors_n`, `paises`, `metodo_pago`, `proveedor_actual`, `fecha_conversacion`, `acepta_intro` y `contacto_sabe_ontop`.
+- **`en_crm_ontop`** (`pendiente` / `libre` / `tomado`): lo confirma Ontop. Con `tomado`, la empresa queda descalificada y no se puede contactar.
+- **Dominio** de las empresas que llegan sin él (`sin-dominio:*`).
+- **Contacto manual** con `crm contacto <id> --nombre ... --email ...`, que queda con `contacto_fuente=manual` y `email_status=unknown`.
+
+## Regla de contactos
+
+- Los contactos solo vienen de **(a) Hunter**, con su `email_status` (`verified` | `accept_all` | `unknown`), o de **(b) ingreso manual** marcado `contacto_fuente=manual`.
+- **Ningún LLM genera ni completa nombres, correos, cargos ni LinkedIn.** El esquema de la Fase 2 prohíbe campos de personas.
+- Sin `email_status`, el estado es `unknown` y el criterio acceso no suma puntos.
+- LinkedIn: solo el que devuelve Hunter, y solo en `crm.csv`. Nunca en el JSON público.
+
+Los tests están en `tests/test_contacts.py`.
+
+## Cumplimiento (Ley 1581 de 2012)
+
+- Solo datos públicos y correos corporativos del dominio de la empresa. Se rechazan gmail, hotmail, outlook y similares.
+- Nada de scraping de LinkedIn ni de celulares personales. El sistema no guarda teléfonos.
+- `public/prospects.json` no lleva nombres ni LinkedIn y enmascara los correos (`a***@empresa.com`).
+- `crm.csv`, `data/seed/`, `data/manual_signals.json`, `out/` (cachés) y `.env` están en `.gitignore`.
+
+## Supuestos del puntaje (editables en `icp/ontop.yaml`)
+
+- **acceso**: con `fecha_conversacion` se cuenta como contacto conocido (15). La intro cálida (15) entra como hecho `acceso: intro_calida` en las señales manuales.
+- **paises**: `crm.csv` no tiene columna de entidad extranjera. Ese hecho llega desde Get on Board (sede fuera de LATAM) o desde señales manuales. Sin él, solo suman los +5 por 3 o más países.
+- **tamano_etapa**: Serie D o posterior = 5 aunque tenga más de 20 empleados. Bootstrapped con 20 o más empleados = 10.
